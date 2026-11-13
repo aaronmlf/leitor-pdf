@@ -35,7 +35,18 @@ export interface ChapterRecord extends ParsedChapter {
   bookId: string
   chapterIndex: number
   textOffset?: number
+  ocr?: OcrPageState
 }
+
+export interface OcrPageState {
+  status: 'recognized' | 'empty' | 'failed'
+  language: string
+  updatedAt: number
+}
+
+export type OcrPageResult =
+  | { status: 'recognized'; language: string; paragraphs: string[] }
+  | { status: 'empty' | 'failed'; language: string }
 
 /** Arquivo original guardado como Blob (permite reprocessar depois). */
 export interface FileRecord {

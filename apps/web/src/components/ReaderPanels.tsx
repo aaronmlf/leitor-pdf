@@ -8,6 +8,39 @@ import type { useReaderAppearance } from '../hooks/useReaderAppearance'
 
 type ReaderState = ReturnType<typeof useReader>
 
+export function TimerPanel({ reader }: { reader: ReaderState }) {
+  const { sleep, book, sentences, chapterIndex } = reader
+  const isPdf = book?.format === 'pdf'
+  const section = isPdf ? 'página' : 'capítulo'
+  return (
+    <>
+      <p className="muted">A narração pausa no horário escolhido e conserva a posição.</p>
+      <div className="reader-inline-actions">
+        {([15, 30, 60] as const).map(minutes => (
+          <button type="button" className="btn" key={minutes} onClick={() => sleep.startForMinutes(minutes)}>
+            {minutes} min
+          </button>
+        ))}
+      </div>
+      <button type="button" className="btn reader-standalone-action" disabled={!sentences.length}
+        onClick={() => sleep.startForChapter(chapterIndex)}>
+        {isPdf ? 'Até o fim da página' : 'Até o fim do capítulo'}
+      </button>
+      {sleep.timer && (
+        <div className="reader-panel-section">
+          {sleep.timer.kind === 'time' ? <p>Tempo restante <span role="timer">{formatTimer(sleep.remaining)}</span></p>
+            : <p>Pausa no fim {isPdf ? 'da' : 'do'} {section}.</p>}
+          <button type="button" className="btn reader-standalone-action" onClick={sleep.cancel}>Cancelar temporizador</button>
+        </div>
+      )}
+    </>
+  )
+}
+
+export function formatTimer(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
 function OutlineList({ items, navigate }: { items: OutlineEntry[]; navigate: (entry: OutlineEntry) => void }) {
   return (
     <ul className="reader-item-list reader-outline-list">
@@ -367,6 +400,13 @@ export function VoicesPanel({ reader }: { reader: ReaderState }) {
           <option value="piper">Piper</option>
         </select>
       </label>
+      {!isPiper && (
+        <label className="reader-check">
+          <input type="checkbox" checked={reader.localVoicesOnly} disabled={!reader.engineLoaded}
+            onChange={event => reader.setOnlyLocalVoices(event.target.checked)} />
+          Mostrar só vozes locais
+        </label>
+      )}
       <label className="reader-field">
         {isPiper ? 'Voz baixada' : 'Voz do sistema'}
         <select
@@ -374,7 +414,9 @@ export function VoicesPanel({ reader }: { reader: ReaderState }) {
           disabled={reader.voicesLoading || !reader.hasVoices}
           onChange={event => reader.setVoice(event.target.value || null)}
         >
-          <option value="">{isPiper ? 'Escolher voz…' : 'Padrão do aparelho'}</option>
+          <option value="" disabled={!isPiper && reader.localVoicesOnly}>
+            {isPiper || reader.localVoicesOnly ? 'Escolher voz…' : 'Padrão do aparelho'}
+          </option>
           {reader.voices.map(voice => (
             <option key={voice.id} value={voice.id}>
               {voice.name} ({voice.lang}){'localService' in voice && voice.localService === false ? ' · online' : ''}
@@ -393,7 +435,10 @@ export function VoicesPanel({ reader }: { reader: ReaderState }) {
         <p className="reader-panel-error">Este aparelho não oferece suporte a este motor de voz.</p>
       )}
       {!isPiper && !reader.voicesLoading && !reader.hasVoices && (
-        <button type="button" className="btn reader-standalone-action" onClick={() => reader.setEngine('piper')}>Experimentar o Piper</button>
+        <div className="reader-panel-section">
+          {reader.localVoicesOnly && <p className="muted">Nenhuma voz local está disponível neste aparelho.</p>}
+          <button type="button" className="btn reader-standalone-action" onClick={() => reader.setEngine('piper')}>Experimentar o Piper</button>
+        </div>
       )}
       {isPiper && (
         <>
@@ -442,12 +487,17 @@ export function VoicesPanel({ reader }: { reader: ReaderState }) {
                         </button>
                       </>
                     ) : (
-                      <button type="button" className="btn btn-primary"
-                        disabled={progress !== undefined || reader.voicesLoading}
-                        onClick={() => void reader.downloadVoice(voice.id)}>
-                        {progress === null ? 'Baixando…' : progress !== undefined
-                          ? `Baixando ${Math.round(progress * 100)}%` : error ? 'Tentar novamente' : 'Baixar'}
-                      </button>
+                      progress !== undefined ? (
+                        <button type="button" className="btn" aria-label={`Cancelar download de ${voice.name}`}
+                          onClick={() => reader.cancelVoiceDownload(voice.id)}>
+                          Cancelar download
+                        </button>
+                      ) : (
+                        <button type="button" className="btn btn-primary" disabled={reader.voicesLoading}
+                          onClick={() => void reader.downloadVoice(voice.id)}>
+                          {error ? 'Tentar novamente' : 'Baixar'}
+                        </button>
+                      )
                     )}
                   </div>
                 </li>

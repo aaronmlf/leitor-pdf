@@ -106,8 +106,21 @@ export class PiperVoiceEngine implements VoiceEngine {
   async download(
     voiceId: string,
     onProgress?: (progress: DownloadProgress) => void,
+    signal?: AbortSignal,
   ): Promise<void> {
-    await this.call({ type: 'download', voiceId }, onProgress)
+    signal?.throwIfAborted()
+    const requestId = this.nextRequestId++
+    const abort = () => { this.worker.postMessage({ type: 'cancel-download', requestId }) }
+    signal?.addEventListener('abort', abort, { once: true })
+    try {
+      await this.call({ type: 'download', voiceId }, onProgress, requestId)
+      signal?.throwIfAborted()
+    } catch (error) {
+      signal?.throwIfAborted()
+      throw error
+    } finally {
+      signal?.removeEventListener('abort', abort)
+    }
   }
 
   async downloadedVoices(): Promise<string[]> {
@@ -274,9 +287,9 @@ export class PiperVoiceEngine implements VoiceEngine {
   private call<T extends PiperResponse>(
     message: Record<string, unknown>,
     onProgress?: (progress: DownloadProgress) => void,
+    requestId = this.nextRequestId++,
   ): Promise<T> {
     if (this.workerError) return Promise.reject(this.workerError)
-    const requestId = this.nextRequestId++
     return new Promise<T>((resolve, reject) => {
       this.waiting.set(requestId, {
         resolve: resolve as (value: PiperResponse) => void,

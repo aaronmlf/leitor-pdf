@@ -1,9 +1,10 @@
 import JSZip from 'jszip'
 import { db } from './db'
 import { inferOriginalFormat } from './library'
+import { remapOcrPosition } from './ocr'
 import { createId, hashOriginal } from './original'
-import { resolveReadingPosition } from './positions'
-import type { BookFormat, BookmarkRecord, BookRecord, ChapterRecord, FileRecord, OutlineEntry, ProgressRecord, ReadingAnchor, SettingRecord } from './types'
+import { positionPercent, resolveReadingPosition } from './positions'
+import type { BookFormat, BookmarkRecord, BookRecord, ChapterRecord, FileRecord, OcrPageState, OutlineEntry, ProgressRecord, ReadingAnchor, SettingRecord } from './types'
 
 const FORMAT = 'leitor-library'
 const VERSION = 1
@@ -140,7 +141,13 @@ function archiveBook(value: unknown): value is ArchiveBook {
 function chapterRecord(value: unknown): value is ChapterRecord {
   return object(value) && string(value.bookId) && integer(value.chapterIndex) && string(value.title) &&
     Array.isArray(value.paragraphs) && value.paragraphs.every(string) && optional(value.sourceId, string) &&
-    optional(value.pageNumber, integer) && optional(value.pageLabel, string) && optional(value.textOffset, integer)
+    optional(value.pageNumber, integer) && optional(value.pageLabel, string) && optional(value.textOffset, integer) &&
+    optional(value.ocr, ocrPageState)
+}
+
+function ocrPageState(value: unknown): value is OcrPageState {
+  return object(value) && (value.status === 'recognized' || value.status === 'empty' || value.status === 'failed') &&
+    string(value.language) && !!value.language.trim() && integer(value.updatedAt)
 }
 
 function anchor(value: unknown): value is ReadingAnchor {
@@ -200,6 +207,10 @@ function validateReferences(
     const book = byId.get(chapter.bookId)
     if (!book || chapter.chapterIndex >= book.chapterCount) throw invalidBackup()
     if (book.protected && (chapter.paragraphs.length || chapter.title !== `Página ${chapter.pageNumber ?? chapter.chapterIndex + 1}`)) {
+      throw invalidBackup()
+    }
+    if (chapter.ocr && (book.format !== 'pdf' || book.protected || chapter.pageNumber !== chapter.chapterIndex + 1 ||
+        (chapter.ocr.status === 'recognized' ? !chapter.paragraphs.some(paragraph => paragraph.trim()) : chapter.paragraphs.length))) {
       throw invalidBackup()
     }
     chapterCounts.set(book.id, (chapterCounts.get(book.id) ?? 0) + 1)
@@ -309,7 +320,7 @@ async function prepareBackup(file: Blob): Promise<{ snapshot: Snapshot; preview:
     newIds.add(book.id)
     requiredBytes += book.original.size + (book.coverFile?.size ?? 0)
   }
-  const newRows = manifest.chapters.filter(chapter => newIds.has(chapter.bookId))
+  const newRows = manifest.chapters.filter(chapter => newIds.has(chapter.bookId) || chapter.ocr !== undefined)
   requiredBytes += new Blob([JSON.stringify([newRows, manifest.bookmarks, manifest.progress, manifest.settings])]).size
   await checkSpace(requiredBytes)
 
@@ -353,6 +364,24 @@ function markerPosition(bookmark: BookmarkRecord, chapters: ChapterRecord[], boo
   return JSON.stringify([position.chapterIndex, position.sentenceIndex, bookmark.label])
 }
 
+function mergeOcrPages(chapters: ChapterRecord[], archivedChapters: ChapterRecord[]): Array<{ before: ChapterRecord; after: ChapterRecord }> {
+  const changes: Array<{ before: ChapterRecord; after: ChapterRecord }> = []
+  const archivedByPage = new Map(archivedChapters.map(chapter => [chapter.pageNumber, chapter]))
+  for (const before of chapters) {
+    if (before.pageNumber === undefined || (before.paragraphs.length && !before.ocr)) continue
+    const archived = archivedByPage.get(before.pageNumber)
+    if (!archived?.ocr) continue
+    if (before.ocr) {
+      if (before.ocr.status === 'recognized' && archived.ocr.status !== 'recognized') continue
+      if (archived.ocr.status !== 'recognized' || before.ocr.status === 'recognized') {
+        if (before.ocr.updatedAt >= archived.ocr.updatedAt) continue
+      }
+    }
+    changes.push({ before, after: { ...before, ocr: archived.ocr, paragraphs: archived.paragraphs } })
+  }
+  return changes
+}
+
 export async function restoreLibraryBackup(file: Blob): Promise<{ importedBooks: number; mergedBooks: number }> {
   const { snapshot, knownBooks } = await prepareBackup(file)
   const legacyHashes = new Map(knownBooks.map(book => [book.id, book.contentHash]))
@@ -378,10 +407,17 @@ export async function restoreLibraryBackup(file: Blob): Promise<{ importedBooks:
       let book = findExisting(archivedBook, byId, byHash)
       const archivedChapters = (importedChapters.get(archivedBook.id) ?? []).sort((a, b) => a.chapterIndex - b.chapterIndex)
       let chapters: ChapterRecord[]
+      let changedPages = new Map<number, { before: ChapterRecord; after: ChapterRecord }>()
       if (book) {
         mergedBooks++
         chapters = await db.chapters.where('bookId').equals(book.id).sortBy('chapterIndex')
         await db.books.put({ ...book, contentHash: archivedBook.contentHash, format: book.format ?? archivedBook.format })
+        if (book.format === 'pdf' && !book.protected && !archivedBook.protected) {
+          const changes = mergeOcrPages(chapters, archivedChapters)
+          await db.chapters.bulkPut(changes.map(change => change.after))
+          changedPages = new Map(changes.map(change => [change.before.chapterIndex, change]))
+          chapters = chapters.map(chapter => changedPages.get(chapter.chapterIndex)?.after ?? chapter)
+        }
       } else {
         const id = byId.has(archivedBook.id) ? createId() : archivedBook.id
         book = { ...archivedBook, id }
@@ -396,7 +432,14 @@ export async function restoreLibraryBackup(file: Blob): Promise<{ importedBooks:
       }
 
       const incomingPosition = importedProgress.get(archivedBook.id)
-      const existingPosition = progressByBook.get(book.id)
+      let existingPosition = progressByBook.get(book.id)
+      const progressChange = existingPosition && changedPages.get(existingPosition.chapterIndex)
+      if (existingPosition && progressChange?.after.ocr?.status === 'recognized') {
+        existingPosition = remapOcrPosition(existingPosition, progressChange.before, progressChange.after)
+        existingPosition.progressPercent = positionPercent(book, progressChange.after, existingPosition.sentenceIndex)
+        await db.progress.put(existingPosition)
+        progressByBook.set(book.id, existingPosition)
+      }
       if (incomingPosition && (!existingPosition || incomingPosition.updatedAt > existingPosition.updatedAt)) {
         const resolved = book.protected ? incomingPosition : resolveReadingPosition(chapters, incomingPosition)
         const position = {
@@ -405,12 +448,23 @@ export async function restoreLibraryBackup(file: Blob): Promise<{ importedBooks:
           chapterIndex: resolved.chapterIndex,
           sentenceIndex: resolved.sentenceIndex,
           anchor: book.protected ? undefined : incomingPosition.anchor,
+          progressPercent: book.format === 'pdf'
+            ? positionPercent(book, chapters[resolved.chapterIndex], resolved.sentenceIndex)
+            : incomingPosition.progressPercent,
         }
         await db.progress.put(position)
         progressByBook.set(book.id, position)
       }
 
       const bookMarkers = markersByBook.get(book.id) ?? []
+      for (const [index, marker] of bookMarkers.entries()) {
+        const change = changedPages.get(marker.chapterIndex)
+        if (change?.after.ocr?.status !== 'recognized') continue
+        const mapped = remapOcrPosition(marker, change.before, change.after)
+        await db.bookmarks.put(mapped)
+        bookMarkers[index] = mapped
+        markersById.set(mapped.id, mapped)
+      }
       const byPosition = new Map(bookMarkers.map(marker => [markerPosition(marker, chapters, book), marker]))
       for (const incoming of importedMarkers.get(archivedBook.id) ?? []) {
         const resolved = book.protected ? incoming : resolveReadingPosition(chapters, incoming)

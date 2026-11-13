@@ -17,10 +17,14 @@ import { PiperVoiceEngine, SystemVoiceEngine } from '@leitor/voice'
 import type { AudioCache, DownloadProgress, PiperVoiceOption, VoiceEngine, VoiceInfo } from '@leitor/voice'
 import {
   isAndroidAudio,
+  onBackgroundAudioAction,
   onBackgroundAudioFocusLost,
+  prepareBackgroundAudioArtwork,
+  publishBackgroundAudioState,
   startBackgroundAudio,
   stopBackgroundAudio,
 } from '../native/backgroundAudio'
+import { useSleepTimer } from './useSleepTimer'
 
 export type EngineId = 'system' | 'piper'
 
@@ -75,6 +79,7 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
   const [rate, setRateState] = useState(1)
   const [voiceId, setVoiceIdState] = useState<string | null>(null)
   const [systemVoices, setSystemVoices] = useState<VoiceInfo[]>([])
+  const [localVoicesOnly, setLocalVoicesOnly] = useState(false)
   const [speechError, setSpeechError] = useState<string | null>(null)
 
   // Seleção de motor de voz.
@@ -88,7 +93,7 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number | null>>({})
   const [downloadErrors, setDownloadErrors] = useState<Record<string, string>>({})
   const [sampleStatus, setSampleStatus] = useState<string | null>(null)
-  const downloadingRef = useRef(new Set<string>())
+  const downloadingRef = useRef(new Map<string, AbortController>())
 
   const systemEngine = useMemo(() => new SystemVoiceEngine(), [])
   const piperRef = useRef<PiperVoiceEngine | null>(null)
@@ -98,15 +103,18 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
   const engineSupported = engine?.isSupported() ?? false
   const voices = useMemo(() => engineId === 'piper'
     ? piperCandidates.filter(voice => downloadedIds.includes(voice.id))
-    : systemVoices,
-  [engineId, piperCandidates, downloadedIds, systemVoices])
+    : localVoicesOnly ? systemVoices.filter(voice => voice.localService === true) : systemVoices,
+  [engineId, localVoicesOnly, piperCandidates, downloadedIds, systemVoices])
   const canPlay = engineSupported && engineLoaded && !voicesLoading && (
     engineId === 'piper' ? !!voiceId && downloadedIds.includes(voiceId) : voices.length > 0
   )
   const activeVoice = voices.find(voice => voice.id === voiceId)
 
   const playingRef = useRef(false)
+  const mediaSessionRef = useRef(false)
+  const [artworkDataUrl, setArtworkDataUrl] = useState<string>()
   const playbackPhaseRef = useRef<'idle' | 'starting' | 'active'>('idle')
+  const resumeAfterChapterRef = useRef(false)
   const playbackRequestRef = useRef(0)
   const sentenceRequestRef = useRef(0)
   const rateRef = useRef(1)
@@ -121,6 +129,28 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
     () => book?.chapters.some(chapter => chapter.paragraphs.some(paragraph => paragraph.trim().length > 0)) ?? false,
     [book],
   )
+  const [canGoPrevious, canGoNext] = useMemo(() => [
+    sentenceIndex > 0 || !!book?.chapters.slice(0, chapterIndex).some(chapter => chapter.paragraphs.length > 0),
+    sentenceIndex + 1 < sentences.length || !!book?.chapters.slice(chapterIndex + 1).some(chapter => chapter.paragraphs.length > 0),
+  ], [book, chapterIndex, sentenceIndex, sentences.length])
+
+  const publishMedia = useCallback((status: 'playing' | 'paused' | 'buffering') => {
+    const current = bookRef.current
+    if (!mediaSessionRef.current || !current || !isAndroidAudio()) return
+    const { chapterIndex: ci, sentenceIndex: si } = positionRef.current
+    const chapter = current.chapters[ci]
+    const total = getChapterSentences(chapter).length
+    void publishBackgroundAudioState({
+      title: current.title,
+      subtitle: chapter?.title,
+      position: si,
+      total,
+      status,
+      canGoPrevious: si > 0 || current.chapters.slice(0, ci).some(item => item.paragraphs.length > 0),
+      canGoNext: si + 1 < total || current.chapters.slice(ci + 1).some(item => item.paragraphs.length > 0),
+      artworkDataUrl,
+    })
+  }, [artworkDataUrl])
 
   const persistProgress = useCallback((next: Position & { updatedAt: number }) => {
     lastProgressIntent.current = next
@@ -165,7 +195,7 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
     return piperRef.current
   }, [bookOverride])
 
-  const stopPlayback = useCallback((next: 'idle' | 'paused' | 'finished' = 'paused') => {
+  const stopPlayback = useCallback((next: 'idle' | 'paused' | 'finished' = 'paused', keepSession = false) => {
     const wasPlaying = playingRef.current
     playbackRequestRef.current++
     playbackPhaseRef.current = 'idle'
@@ -174,11 +204,22 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
     if (wasPlaying || next !== 'paused') setPlayback(next)
     else setPlayback(previous => previous === 'idle' ? previous : next)
     setSampleStatus(null)
-    void stopBackgroundAudio()
+    const keepMedia = keepSession && mediaSessionRef.current
+    if (!keepMedia) mediaSessionRef.current = false
+    void stopBackgroundAudio({ keepSession: keepMedia })
   }, [engine])
 
+  const pause = useCallback(() => stopPlayback('paused', true), [stopPlayback])
+  const stopReading = useCallback(() => stopPlayback(), [stopPlayback])
+  const onTimerEnd = useCallback((afterChapter: boolean) => {
+    resumeAfterChapterRef.current = afterChapter
+    stopPlayback('paused')
+  }, [stopPlayback])
+  const sleep = useSleepTimer(onTimerEnd)
+
   const beginPlayback = useCallback((reading: boolean, speak: () => void) => {
-    stopPlayback('idle')
+    const resume = reading && mediaSessionRef.current
+    if (!resume) stopPlayback('idle')
     const request = playbackRequestRef.current
     playbackPhaseRef.current = 'starting'
     playingRef.current = reading
@@ -194,15 +235,22 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
       return
     }
 
+    if (reading) {
+      mediaSessionRef.current = true
+      publishMedia('buffering')
+    }
     void startBackgroundAudio().then(granted => {
       if (request !== playbackRequestRef.current) return
-      if (granted) start()
+      if (granted) {
+        if (reading) sleep.syncNative()
+        start()
+      }
       else {
         stopPlayback('paused')
         setSpeechError('O áudio está indisponível. Tente novamente.')
       }
     })
-  }, [stopPlayback])
+  }, [publishMedia, sleep.syncNative, stopPlayback])
 
   // Loop de reprodução: fala a frase e encadeia a próxima (atravessa capítulos).
   useEffect(() => {
@@ -218,6 +266,7 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
       }
       const sentence = list[si]
       if (!sentence) {
+        sleep.clear()
         stopPlayback('finished')
         return
       }
@@ -241,12 +290,14 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
         prefetch: next ? spokenText(next.text) || next.text : null,
         onStart: () => { if (isCurrent()) setPlayback('playing') },
         onEnd: () => {
-          if (isCurrent()) speakAtRef.current(ci, si + 1)
+          if (!isCurrent()) return
+          if (si + 1 === list.length && sleep.checkChapterEnd(ci)) return
+          speakAtRef.current(ci, si + 1)
         },
         onAbort,
       }).catch(error => onAbort(error instanceof Error ? error.message : 'Falha na reprodução.'))
     }
-  }, [engine, setPosition, stopPlayback, voices])
+  }, [engine, setPosition, sleep.checkChapterEnd, sleep.clear, stopPlayback, voices])
 
   // Carrega o livro, capítulos e a última posição (só depende do livro).
   useEffect(() => {
@@ -279,30 +330,51 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
     playbackPhaseRef.current = 'idle'
     playingRef.current = false
     systemEngine.stop()
+    for (const request of downloadingRef.current.values()) request.abort()
+    downloadingRef.current.clear()
     piperRef.current?.dispose()
     piperRef.current = null
     void stopBackgroundAudio()
   }, [systemEngine])
 
-  useEffect(() => onBackgroundAudioFocusLost(() => {
+  useEffect(() => onBackgroundAudioFocusLost((reason, deadline?: number) => {
+    if (reason === 'timer') {
+      sleep.expireIfDue(deadline)
+      return
+    }
     if (playbackPhaseRef.current === 'idle') return
     stopPlayback()
-    setSpeechError('A reprodução foi interrompida por outro áudio.')
-  }), [stopPlayback])
+    setSpeechError(reason === 'route' ? 'A saída de áudio foi desconectada.' : 'A reprodução foi interrompida por outro áudio.')
+  }), [sleep.expireIfDue, stopPlayback])
+
+  useEffect(() => {
+    if (!isAndroidAudio() || !book?.cover) return
+    let active = true
+    void prepareBackgroundAudioArtwork(book.cover).then(data => {
+      if (active) setArtworkDataUrl(data)
+    })
+    return () => { active = false }
+  }, [book?.cover])
+
+  useEffect(() => {
+    publishMedia(playback === 'playing' ? 'playing' : playback === 'preparing' ? 'buffering' : 'paused')
+  }, [book, chapterIndex, playback, publishMedia, sentenceIndex])
 
   // Restaura o motor e a velocidade escolhidos na sessão anterior.
   useEffect(() => {
     let alive = true
     void (async () => {
-      const [savedEngine, savedRate] = await Promise.all([
+      const [savedEngine, savedRate, savedLocalOnly] = await Promise.all([
         loadSetting('engine').catch(() => undefined),
         loadSetting('rate').catch(() => undefined),
+        loadSetting('systemVoicesLocalOnly').catch(() => undefined),
       ])
       if (!alive) return
       if (savedEngine === 'piper') {
         ensurePiper()
         setEngineIdState('piper')
       }
+      setLocalVoicesOnly(savedLocalOnly === 'true')
       const value = Number(savedRate)
       if (Number.isFinite(value) && value >= 0.5 && value <= 3) {
         setRateState(value)
@@ -346,8 +418,10 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
           const list = await engine.listVoices()
           if (!alive) return
           setSystemVoices(list)
-          const id = saved === '' ? null : defaultVoiceId(list)
-          updateVoice(saved && list.some(voice => voice.id === saved) ? saved : id)
+          const eligible = localVoicesOnly ? list.filter(voice => voice.localService === true) : list
+          const id = localVoicesOnly ? defaultVoiceId(eligible) ?? eligible[0]?.id ?? null
+            : saved === '' ? null : defaultVoiceId(eligible)
+          updateVoice(saved && eligible.some(voice => voice.id === saved) ? saved : id)
         }
       } catch (error) {
         if (!alive) return
@@ -360,25 +434,29 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
     return () => {
       alive = false
     }
-  }, [engine, engineId, engineLoaded, updateVoice, voiceLoadAttempt])
+  }, [engine, engineId, engineLoaded, localVoicesOnly, updateVoice, voiceLoadAttempt])
 
   const play = useCallback(() => {
-    if (!canPlay || !hasReadableText || !bookRef.current) return
+    if (!canPlay || !hasReadableText || !bookRef.current || playingRef.current) return
     beginPlayback(true, () => {
       const { chapterIndex: ci, sentenceIndex: si } = positionRef.current
-      speakAtRef.current(ci, si)
+      const nextSentence = resumeAfterChapterRef.current ? si + 1 : si
+      resumeAfterChapterRef.current = false
+      speakAtRef.current(ci, nextSentence)
     })
   }, [beginPlayback, canPlay, hasReadableText])
 
   const togglePlay = useCallback(() => {
-    if (playingRef.current) stopPlayback()
+    if (playingRef.current) pause()
     else play()
-  }, [stopPlayback, play])
+  }, [pause, play])
 
   const seek = useCallback(
     (ci: number, si: number, persist = true) => {
       const chapters = bookRef.current?.chapters
       if (!chapters?.[ci]) return
+      resumeAfterChapterRef.current = false
+      sleep.onChapterJump(ci)
       const index = validIndex(si, getChapterSentences(chapters[ci]).length)
       setPositionNotice(null)
       const continueReading = playingRef.current && playbackPhaseRef.current === 'active'
@@ -390,7 +468,7 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
       engine?.stop()
       speakAtRef.current(ci, index)
     },
-    [engine, setPosition],
+    [engine, setPosition, sleep.onChapterJump],
   )
 
   const moveSentence = useCallback((direction: -1 | 1) => {
@@ -414,6 +492,17 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
   const nextSentence = useCallback(() => moveSentence(1), [moveSentence])
   const prevSentence = useCallback(() => moveSentence(-1), [moveSentence])
 
+  const mediaActions = useRef({ play, pause, nextSentence, prevSentence })
+  mediaActions.current = { play, pause, nextSentence, prevSentence }
+  useEffect(() => onBackgroundAudioAction(action => {
+    if (!mediaSessionRef.current) return
+    const controls = mediaActions.current
+    if (action === 'play' && !playingRef.current) controls.play()
+    else if (action === 'pause' && playingRef.current) controls.pause()
+    else if (action === 'next') controls.nextSentence()
+    else if (action === 'previous') controls.prevSentence()
+  }), [])
+
   const gotoChapter = useCallback((ci: number) => seek(ci, 0), [seek])
 
   const gotoParagraph = useCallback((ci: number, paragraph: number) => {
@@ -431,6 +520,7 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
   const setVoice = useCallback(
     (id: string | null) => {
       if (engineId === 'piper' && id && !downloadedIds.includes(id)) return
+      if (engineId === 'system' && localVoicesOnly && !voices.some(voice => voice.id === id)) return
       updateVoice(id)
       void saveSetting(`voice:${engineId}`, id ?? '')
       if (playingRef.current) {
@@ -441,8 +531,41 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
         }
       }
     },
-    [downloadedIds, engineId, seek, stopPlayback, updateVoice],
+    [downloadedIds, engineId, localVoicesOnly, seek, stopPlayback, updateVoice, voices],
   )
+
+  const setOnlyLocalVoices = useCallback((onlyLocal: boolean) => {
+    if (onlyLocal === localVoicesOnly) return
+    stopPlayback()
+    setVoicesLoading(true)
+    setVoiceError(null)
+    setLocalVoicesOnly(onlyLocal)
+    void saveSetting('systemVoicesLocalOnly', String(onlyLocal)).catch(() => {
+      setVoiceError('Não foi possível salvar o filtro de vozes do aparelho.')
+    })
+  }, [localVoicesOnly, stopPlayback])
+
+  const applyOcrPage = useCallback((chapter: ChapterRecord) => {
+    const current = bookRef.current
+    if (!current || current.id !== chapter.bookId) return
+    const next = { ...current, chapters: current.chapters.map(item =>
+      item.chapterIndex === chapter.chapterIndex ? chapter : item) }
+    bookRef.current = next
+    setBook(next)
+    if (positionRef.current.chapterIndex !== chapter.chapterIndex) return
+    if (current.chapters[chapter.chapterIndex]?.paragraphs !== chapter.paragraphs) resumeAfterChapterRef.current = false
+    const index = validIndex(positionRef.current.sentenceIndex, getChapterSentences(chapter).length)
+    setPosition(chapter.chapterIndex, index, false)
+    const expectedBook = next.id
+    const expected = positionRef.current
+    void loadProgress(expectedBook).then(progress => {
+      if (!progress || progress.chapterIndex !== chapter.chapterIndex || positionRef.current !== expected ||
+        bookRef.current?.chapters[chapter.chapterIndex] !== chapter) return
+      const resolved = resolveReadingPosition(bookRef.current.chapters, progress)
+      setPosition(resolved.chapterIndex, resolved.sentenceIndex, false)
+      setPositionNotice(resolved.approximate ? 'A posição salva foi aproximada.' : null)
+    }).catch(() => undefined)
+  }, [setPosition])
 
   const setEngine = useCallback(
     (id: EngineId) => {
@@ -463,7 +586,8 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
     async (id: string) => {
       const piper = ensurePiper()
       if (!piper || downloadingRef.current.has(id)) return
-      downloadingRef.current.add(id)
+      const request = new AbortController()
+      downloadingRef.current.set(id, request)
       setDownloadProgress(previous => ({ ...previous, [id]: null }))
       setDownloadErrors(previous => {
         const next = { ...previous }
@@ -476,24 +600,31 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
             ...prev,
             [id]: progress.total > 0 ? Math.min(progress.loaded / progress.total, 1) : null,
           }))
-        })
+        }, request.signal)
         const downloaded = await piper.downloadedVoices()
         if (!downloaded.includes(id)) throw new Error('O modelo não foi salvo neste aparelho.')
         setDownloadedIds(previous => [...new Set([...previous, ...downloaded])])
       } catch (error) {
+        if (request.signal.aborted) return
         const message = error instanceof Error ? error.message : 'Erro desconhecido.'
         setDownloadErrors(previous => ({ ...previous, [id]: message }))
       } finally {
-        downloadingRef.current.delete(id)
-        setDownloadProgress(previous => {
-          const next = { ...previous }
-          delete next[id]
-          return next
-        })
+        if (downloadingRef.current.get(id) === request) {
+          downloadingRef.current.delete(id)
+          setDownloadProgress(previous => {
+            const next = { ...previous }
+            delete next[id]
+            return next
+          })
+        }
       }
     },
     [ensurePiper],
   )
+
+  const cancelVoiceDownload = useCallback((id: string) => {
+    downloadingRef.current.get(id)?.abort()
+  }, [])
 
   const playSample = useCallback(
     (id: string) => {
@@ -538,6 +669,11 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
     hasVoices: voices.length > 0,
     hasReadableText,
     activeVoice,
+    localVoicesOnly,
+    setOnlyLocalVoices,
+    sleep,
+    canGoPrevious,
+    canGoNext,
     voicesLoading,
     voiceError,
     retryVoices,
@@ -555,7 +691,8 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
     sampleStatus,
     togglePlay,
     play,
-    pause: stopPlayback,
+    pause,
+    stopReading,
     nextSentence,
     prevSentence,
     gotoChapter,
@@ -565,8 +702,10 @@ export function useReader(bookId: string, bookOverride?: ReaderSource) {
     setVoice,
     setEngine,
     downloadVoice,
+    cancelVoiceDownload,
     playSample,
     stopSample: stopPlayback,
+    applyOcrPage,
     engineSupported,
   }
 }

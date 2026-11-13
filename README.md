@@ -1,6 +1,6 @@
 # Leitor — livros em voz alta
 
-Leitor de EPUB, TXT e PDF com texto selecionável. A mesma interface roda no navegador (PWA), no PC (Tauri) e no Android (Capacitor). Livros e posições ficam no aparelho, no IndexedDB. O Piper precisa de internet para baixar a voz na primeira vez.
+Leitor de EPUB, TXT e PDF, com reconhecimento local de páginas digitalizadas. A mesma interface roda no navegador (PWA), no PC (Tauri) e no Android (Capacitor). Livros e posições ficam no aparelho, no IndexedDB. O Piper precisa de internet para baixar a voz na primeira vez.
 
 Os pacotes de Android e PC ficam em [GitHub Releases](https://github.com/aaronmlf/leitor-pdf/releases).
 
@@ -9,7 +9,14 @@ Os pacotes de Android e PC ficam em [GitHub Releases](https://github.com/aaronml
 - Busca na biblioteca e dentro do livro, sem distinção entre maiúsculas e acentos. A biblioteca oferece **Continuar lendo** e filtros por formato.
 - Sumário, navegação por frase ou página, marcadores editáveis, tamanho do texto, entrelinha, temas e acompanhamento opcional da narração.
 - Backup ZIP com arquivos originais, posições, marcadores e preferências. A restauração exibe uma prévia e mescla os dados. Modelos de voz podem ser baixados novamente.
-- PDF textual com extração local, progresso e cancelamento. Páginas sem texto mantêm a numeração. PDFs com senha são desbloqueados em memória a cada abertura. A leitura de arquivos inteiramente digitalizados depende de OCR, previsto para uma etapa posterior.
+- PDF textual com extração local, progresso e cancelamento. Páginas sem texto mantêm a numeração. PDFs com senha são desbloqueados em memória a cada abertura.
+
+## Recursos da versão 1.2
+
+- Temporizador de 15, 30 ou 60 minutos e opção de parar ao fim do capítulo.
+- Controles do Android para tocar, pausar e navegar por frases na tela bloqueada e em fones compatíveis enquanto o livro está aberto.
+- OCR em português para PDF digitalizado ou misto. Escolha a página atual, um intervalo ou as páginas pendentes. O modelo vem incluído. O texto reconhecido fica disponível para leitura em voz alta, busca e backup. Para PDFs protegidos por senha, o leitor usa a camada de texto disponível no documento.
+- Opção de usar apenas vozes locais, cancelar download de vozes, remover modelos Piper e limpar o cache de áudio.
 
 ## Comandos
 

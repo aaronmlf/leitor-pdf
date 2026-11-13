@@ -1,7 +1,6 @@
 import { db } from './db'
 import { parseEpub } from './epub'
-import { chapterText, createReadingAnchor, resolveReadingPosition } from './positions'
-import { getChapterSentences } from './sentences'
+import { chapterText, createReadingAnchor, positionPercent, resolveReadingPosition } from './positions'
 import { parseTxt } from './txt'
 import type { BookFormat, BookmarkRecord, BookRecord, ChapterRecord, LibraryBook, ParsedBook, ProgressRecord } from './types'
 import { createId, hashOriginal } from './original'
@@ -113,19 +112,6 @@ export function inferOriginalFormat(file?: Blob): BookFormat {
   if (/\.pdf$/i.test(name) || file?.type === 'application/pdf') return 'pdf'
   if (/\.txt$/i.test(name) || /^text\/plain(?:;|$)/i.test(file?.type ?? '')) return 'txt'
   return 'epub'
-}
-
-function positionPercent(book: BookRecord, chapter: ChapterRecord | undefined, sentenceIndex: number): number {
-  if (!chapter) return 0
-  if (book.protected) return Math.round(100 * (chapter.chapterIndex + 1) / Math.max(1, book.chapterCount))
-  const sentences = getChapterSentences(chapter)
-  const sentence = sentences[sentenceIndex]
-  if (book.textLength && chapter.textOffset !== undefined) {
-    const offset = chapter.textOffset + (sentence?.startOffset ?? 0) + (sentence?.text.length ?? 0)
-    return Math.max(0, Math.min(100, Math.round(100 * offset / book.textLength)))
-  }
-  const section = chapter.chapterIndex + (sentenceIndex + 1) / Math.max(1, sentences.length)
-  return Math.max(0, Math.min(100, Math.round(100 * section / Math.max(1, book.chapterCount))))
 }
 
 export async function getBookMeta(bookId: string): Promise<BookRecord | undefined> {

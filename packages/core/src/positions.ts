@@ -1,5 +1,5 @@
 import { getChapterSentences, normalizeParagraph } from './sentences'
-import type { ChapterRecord, ReadingAnchor, ReadingPosition } from './types'
+import type { BookRecord, ChapterRecord, ReadingAnchor, ReadingPosition } from './types'
 
 const CONTEXT_LENGTH = 48
 const QUOTE_LENGTH = 96
@@ -29,6 +29,20 @@ export function createReadingAnchor(chapter: ChapterRecord, sentenceIndex: numbe
     prefix: text.slice(Math.max(0, offset - CONTEXT_LENGTH), offset),
     suffix: text.slice(end, end + CONTEXT_LENGTH),
   }
+}
+
+export function positionPercent(book: BookRecord, chapter: ChapterRecord | undefined, sentenceIndex: number): number {
+  if (!chapter) return 0
+  const page = chapter.pageNumber ?? chapter.chapterIndex + 1
+  if (book.protected) return Math.round(100 * page / Math.max(1, book.chapterCount))
+  const sentences = getChapterSentences(chapter)
+  const sentence = sentences[sentenceIndex]
+  if (book.format !== 'pdf' && book.textLength && chapter.textOffset !== undefined) {
+    const offset = chapter.textOffset + (sentence?.startOffset ?? 0) + (sentence?.text.length ?? 0)
+    return Math.max(0, Math.min(100, Math.round(100 * offset / book.textLength)))
+  }
+  const part = (Math.min(sentenceIndex, Math.max(0, sentences.length - 1)) + 1) / Math.max(1, sentences.length)
+  return Math.max(0, Math.min(100, Math.round(100 * (page - 1 + part) / Math.max(1, book.chapterCount))))
 }
 
 function sentenceAt(chapter: ChapterRecord, offset: number): number {
@@ -107,7 +121,9 @@ export function resolveReadingPosition(chapters: ChapterRecord[], position: Read
   if (anchor.quote) {
     const preferredMatch = findMatch(chapters, [preferredIndex], anchor)
     const otherIndexes = chapters.map((_, index) => index).filter(index => index !== preferredIndex)
-    const match = preferredMatch ?? findMatch(chapters, otherIndexes, anchor)
+    const match = preferredMatch ?? (sourceIndex !== -1 && preferred.pageNumber !== undefined
+      ? undefined
+      : findMatch(chapters, otherIndexes, anchor))
     const matchedChapter = match && chapters[match.chapterIndex]
     if (match && matchedChapter) {
       return { chapterIndex: match.chapterIndex, sentenceIndex: sentenceAt(matchedChapter, match.offset), approximate: false }

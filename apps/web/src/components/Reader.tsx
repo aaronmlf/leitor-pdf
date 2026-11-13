@@ -6,7 +6,9 @@ import { useBookmarks } from '../hooks/useBookmarks'
 import { useReader } from '../hooks/useReader'
 import type { Position, ReaderSource } from '../hooks/useReader'
 import { useReaderAppearance } from '../hooks/useReaderAppearance'
-import { AppearancePanel, BookmarksPanel, ContentsPanel, SearchPanel, VoicesPanel } from './ReaderPanels'
+import { useReaderOcr } from '../hooks/useReaderOcr'
+import { AppearancePanel, BookmarksPanel, ContentsPanel, formatTimer, SearchPanel, TimerPanel, VoicesPanel } from './ReaderPanels'
+import ReaderOcrPanel from './ReaderOcrPanel'
 import './reader.css'
 
 const panelLabels = {
@@ -15,6 +17,8 @@ const panelLabels = {
   bookmarks: 'Marcadores',
   appearance: 'Aparência',
   voices: 'Voz',
+  timer: 'Temporizador',
+  ocr: 'Reconhecer texto',
 }
 type Panel = keyof typeof panelLabels
 
@@ -51,6 +55,7 @@ export default function Reader({
   const reader = useReader(bookId, bookOverride)
   const settings = useReaderAppearance()
   const bookmarks = useBookmarks(bookId)
+  const ocr = useReaderOcr(bookId, reader.applyOcrPage, reader.stopReading)
   const [panel, setPanel] = useState<Panel | null>(null)
   const [query, setQuery] = useState('')
   const [matchIndex, setMatchIndex] = useState(-1)
@@ -248,10 +253,11 @@ export default function Reader({
   const { book } = reader
   const chapter = book.chapters[reader.chapterIndex]
   const isPdf = book.format === 'pdf'
+  const canOcr = isPdf && !book.protected
   const chapterPosition = isPdf ? chapter?.pageNumber ?? reader.chapterIndex + 1 : reader.chapterIndex + 1
   const section = chapter ? `${isPdf ? 'Página' : 'Capítulo'} ${chapterPosition} de ${book.chapters.length}` : ''
   const activeMatch = matches[matchIndex]
-  const setupMessage = !reader.hasReadableText ? 'Este documento não tem texto para narrar.'
+  const setupMessage = ocr.running ? null : !reader.hasReadableText ? 'Este documento não tem texto para narrar.'
     : reader.voicesLoading ? 'Carregando vozes…'
     : !reader.engineSupported || reader.voiceError ? 'A voz selecionada está indisponível.'
     : !reader.hasVoices && reader.engineId === 'system' ? 'Nenhuma voz do sistema foi encontrada.'
@@ -281,7 +287,7 @@ export default function Reader({
           {section && <p className="muted">{section}</p>}
         </div>
         <nav className="reader-tools" aria-label="Ferramentas de leitura">
-          {(Object.keys(panelLabels) as Panel[]).map(item => (
+          {(Object.keys(panelLabels) as Panel[]).filter(item => item !== 'ocr' || canOcr).map(item => (
             <button
               type="button"
               key={item}
@@ -291,7 +297,7 @@ export default function Reader({
               aria-controls={panel === item ? 'reader-panel' : undefined}
               onClick={event => showPanel(item, event.currentTarget)}
             >
-              {item === 'search' ? 'Buscar' : panelLabels[item]}
+              {item === 'search' ? 'Buscar' : item === 'ocr' ? 'OCR' : panelLabels[item]}
             </button>
           ))}
         </nav>
@@ -356,8 +362,19 @@ export default function Reader({
                 })}
               </div>
             ) : (
-              <p className="muted">{isPdf ? 'Esta página não tem texto selecionável.' : 'Este trecho não tem texto legível.'}</p>
+              <div className="reader-panel-section">
+                <p className="muted">{isPdf ? 'Esta página não tem texto selecionável.' : 'Este trecho não tem texto legível.'}</p>
+                {isPdf && chapter?.ocr?.status === 'empty' && <p className="muted">O reconhecimento não encontrou texto.</p>}
+                {isPdf && chapter?.ocr?.status === 'failed' && <p className="muted">Não foi possível reconhecer o texto desta página.</p>}
+                {isPdf && book.protected && <p className="muted">O reconhecimento não está disponível neste PDF protegido.</p>}
+                {canOcr && (
+                  <button type="button" className="btn reader-standalone-action" onClick={event => showPanel('ocr', event.currentTarget)}>
+                    {ocr.running ? 'Ver reconhecimento' : 'Reconhecer texto da página'}
+                  </button>
+                )}
+              </div>
             )}
+            {chapter?.ocr?.status === 'recognized' && <p className="reader-message">Texto reconhecido da imagem da página.</p>}
             {reader.positionNotice && <p className="reader-message" role="status">{reader.positionNotice}</p>}
             {navigationNotice && <p className="reader-message" role="status">{navigationNotice}</p>}
           </article>
@@ -391,6 +408,8 @@ export default function Reader({
             )}
             {panel === 'appearance' && <AppearancePanel settings={settings} />}
             {panel === 'voices' && <VoicesPanel reader={reader} />}
+            {panel === 'timer' && <TimerPanel reader={reader} />}
+            {panel === 'ocr' && canOcr && <ReaderOcrPanel book={book} chapterIndex={reader.chapterIndex} ocr={ocr} />}
           </section>
         )}
       </div>
@@ -399,7 +418,7 @@ export default function Reader({
         {reader.speechError && (
           <div className="reader-feedback">
             <p className="reader-panel-error" role="alert">{reader.speechError}</p>
-            {reader.canPlay && <button type="button" className="btn" onClick={reader.play}>Tentar ouvir</button>}
+            {reader.canPlay && !ocr.running && <button type="button" className="btn" onClick={reader.play}>Tentar ouvir</button>}
           </div>
         )}
         {reader.progressError && (
@@ -416,23 +435,36 @@ export default function Reader({
                 Escolher voz
               </button>
             )}
+            {!reader.hasReadableText && canOcr && (
+              <button type="button" className="btn" onClick={event => showPanel('ocr', event.currentTarget)}>
+                Reconhecer texto do PDF
+              </button>
+            )}
+          </div>
+        )}
+        {ocr.running && panel !== 'ocr' && (
+          <div className="reader-feedback">
+            <p className="muted" role="status">Reconhecendo texto do PDF…</p>
+            <button type="button" className="btn" onClick={event => showPanel('ocr', event.currentTarget)}>
+              Ver progresso
+            </button>
           </div>
         )}
         <div className="reader-controls">
-          <button type="button" className="icon-btn big" onClick={() => moveSentence(-1)} aria-label="Frase anterior">
+          <button type="button" className="icon-btn big" disabled={!reader.canGoPrevious} onClick={() => moveSentence(-1)} aria-label="Frase anterior">
             <span aria-hidden="true">⏮</span>
           </button>
           <button
             type="button"
             className="play-btn"
             onClick={reader.togglePlay}
-            disabled={(!reader.canPlay || !reader.hasReadableText) && !reader.playing}
+            disabled={ocr.running || ((!reader.canPlay || !reader.hasReadableText) && !reader.playing)}
             aria-label={playLabel}
             title={playLabel}
           >
             <span aria-hidden="true">{reader.playback === 'preparing' ? '■' : reader.playing ? '⏸' : '▶'}</span>
           </button>
-          <button type="button" className="icon-btn big" onClick={() => moveSentence(1)} aria-label="Próxima frase">
+          <button type="button" className="icon-btn big" disabled={!reader.canGoNext} onClick={() => moveSentence(1)} aria-label="Próxima frase">
             <span aria-hidden="true">⏭</span>
           </button>
           <select
@@ -459,6 +491,13 @@ export default function Reader({
         </div>
         <div className="reader-playback-status">
           <p role="status">{playbackLabels[reader.playback]}{reader.playback === 'playing' && reader.activeVoice ? ` · ${reader.activeVoice.name}` : ''}</p>
+          {reader.sleep.notice && <p role="status">{reader.sleep.notice}</p>}
+          {reader.sleep.timer && (
+            <button type="button" className="btn" onClick={event => showPanel('timer', event.currentTarget)}>
+              {reader.sleep.timer.kind === 'time' ? <>Temporizador <span role="timer">{formatTimer(reader.sleep.remaining)}</span></>
+                : isPdf ? 'Temporizador · fim da página' : 'Temporizador · fim do capítulo'}
+            </button>
+          )}
           {(manualScroll || !settings.appearance.follow) && (
             <button type="button" className="btn" onClick={centerSentence}>Voltar à frase atual</button>
           )}

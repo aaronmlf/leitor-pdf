@@ -100,6 +100,7 @@
 }
 
 .reader-workspace .icon-btn { min-width: 44px; }
+.reader-workspace .icon-btn:disabled { opacity: .55; cursor: default; }
 .reader-workspace .btn[aria-expanded='true'] {
   color: var(--reader-on-accent);
   background: var(--reader-accent);
@@ -266,6 +267,9 @@
   gap: 8px;
   min-width: 0;
 }
+
+.reader-ocr-range { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.reader-ocr-image { display: block; width: 100%; height: auto; background: white; border-radius: 4px; }
 
 .reader-field,
 .reader-panel-form label,

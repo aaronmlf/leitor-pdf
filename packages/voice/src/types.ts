@@ -60,7 +60,7 @@ export interface PiperVoiceOption {
 
 /** Motores com download de modelo (ex.: Piper). */
 export interface DownloadableVoiceEngine extends VoiceEngine {
-  download(voiceId: string, onProgress?: (progress: DownloadProgress) => void): Promise<void>
+  download(voiceId: string, onProgress?: (progress: DownloadProgress) => void, signal?: AbortSignal): Promise<void>
   downloadedVoices(): Promise<string[]>
   removeVoice(voiceId: string): Promise<void>
 }

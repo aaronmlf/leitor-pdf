@@ -9,6 +9,9 @@ const require = createRequire(import.meta.url)
 const pdfPackage = dirname(require.resolve('pdfjs-dist/package.json'))
 const ortDistribution = dirname(require.resolve('onnxruntime-web'))
 const piperPackage = dirname(require.resolve('@diffusionstudio/piper-wasm/package.json'))
+const ocrEngine = dirname(require.resolve('tesseract.js/package.json'))
+const ocrCore = dirname(require.resolve('tesseract.js-core/package.json'))
+const ocrLanguage = dirname(require.resolve('@tesseract.js-data/por/package.json'))
 const pdfDirectories = ['cmaps', 'iccs', 'standard_fonts', 'wasm']
 const runtimeFiles = [
   ...pdfDirectories.map(name => ({ source: join(pdfPackage, name), directory: 'pdf-assets', name })),
@@ -20,6 +23,14 @@ const runtimeFiles = [
   ...['piper_phonemize.data', 'piper_phonemize.wasm'].map(name => ({
     source: join(piperPackage, 'build', name), directory: 'piper', name,
   })),
+  { source: join(ocrEngine, 'dist', 'worker.min.js'), directory: 'ocr', name: 'worker.min.js' },
+  { source: join(ocrEngine, 'dist', 'worker.min.js.LICENSE.txt'), directory: 'ocr', name: 'worker.min.js.LICENSE.txt' },
+  { source: join(ocrCore, 'LICENSE'), directory: 'ocr', name: 'LICENSE' },
+  { source: join(ocrLanguage, '4.0.0_best_int', 'por.traineddata.gz'), directory: 'ocr', name: 'por.traineddata.gz' },
+  ...['lstm', 'simd-lstm', 'relaxedsimd-lstm'].map(variant => {
+    const name = `tesseract-core-${variant}.wasm.js`
+    return { source: join(ocrCore, name), directory: 'ocr', name }
+  }),
 ]
 
 function localRuntimeAssets(): Plugin {
@@ -92,7 +103,8 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,mjs,css,html,svg,png,ico,epub}', 'pdf-assets/**/*'],
+        globPatterns: ['**/*.{js,mjs,css,html,svg,png,ico,epub}', 'pdf-assets/**/*', 'ocr/*'],
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallback: '/index.html',
         // WASMs do motor TTS ficam fora do precache (grandes) e entram no cache
         // de execução: primeira visita online, depois funcionam offline.

@@ -13,6 +13,7 @@ type Request =
   | { type: 'voices'; requestId: number }
   | { type: 'stored'; requestId: number }
   | { type: 'download'; requestId: number; voiceId: string }
+  | { type: 'cancel-download'; requestId: number }
   | { type: 'synthesize'; requestId: number; voiceId: string; text: string }
   | { type: 'remove'; requestId: number; voiceId: string }
 
@@ -42,6 +43,7 @@ const enqueue = <T>(job: () => Promise<T>): Promise<T> => {
 // A lib trata TtsSession como singleton e trocar de voz sem reinit usa o
 // modelo errado: guardamos uma sessão por voz e zeramos o singleton antes.
 const sessions = new Map<string, Promise<InstanceType<typeof tts.TtsSession>>>()
+const downloads = new Map<number, AbortController>()
 
 async function voiceDirectory(): Promise<FileSystemDirectoryHandle> {
   const root = await navigator.storage.getDirectory()
@@ -64,8 +66,8 @@ async function hasVoice(directory: FileSystemDirectoryHandle, voiceId: string): 
   }
 }
 
-async function fetchVoiceFile(path: string): Promise<Response> {
-  const response = await fetch(`${tts.HF_BASE}/${path}`)
+async function fetchVoiceFile(path: string, signal: AbortSignal): Promise<Response> {
+  const response = await fetch(`${tts.HF_BASE}/${path}`, { signal })
   if (!response.ok) throw new Error(`O download da voz falhou (HTTP ${response.status}).`)
   return response
 }
@@ -74,6 +76,7 @@ async function saveVoiceFile(
   directory: FileSystemDirectoryHandle,
   name: string,
   stream: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
   onProgress?: (loaded: number) => void,
 ): Promise<void> {
   const file = await directory.getFileHandle(name, { create: true })
@@ -84,6 +87,7 @@ async function saveVoiceFile(
     writer.truncate(0)
     let loaded = 0
     while (true) {
+      signal.throwIfAborted()
       const { done, value } = await reader.read()
       if (done) break
       const written = writer.write(value, { at: loaded })
@@ -112,25 +116,27 @@ async function removeVoice(directory: FileSystemDirectoryHandle, voiceId: string
   }))
 }
 
-async function downloadVoice(voiceId: string, requestId: number): Promise<void> {
+async function downloadVoice(voiceId: string, requestId: number, signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted()
   const path = Object.hasOwn(tts.PATH_MAP, voiceId) ? tts.PATH_MAP[voiceId] : undefined
   if (!path) throw new Error('Esta voz não está disponível para download.')
 
   const directory = await voiceDirectory()
   if (await hasVoice(directory, voiceId)) return
-  const config = await (await fetchVoiceFile(`${path}.json`)).blob()
+  const config = await (await fetchVoiceFile(`${path}.json`, signal)).blob()
   JSON.parse(await config.text())
 
   // A configuração é gravada por último para que uma gravação parcial não apareça como voz baixada.
   await removeVoice(directory, voiceId)
-  const response = await fetchVoiceFile(path)
+  const response = await fetchVoiceFile(path, signal)
   if (!response.body) throw new Error('O download da voz veio vazio.')
   const total = Number(response.headers.get('content-length') ?? 0)
   try {
-    await saveVoiceFile(directory, `${voiceId}.onnx`, response.body, loaded => {
+    await saveVoiceFile(directory, `${voiceId}.onnx`, response.body, signal, loaded => {
       ctx.postMessage({ type: 'progress', requestId, loaded, total })
     })
-    await saveVoiceFile(directory, `${voiceId}.onnx.json`, config.stream())
+    await saveVoiceFile(directory, `${voiceId}.onnx.json`, config.stream(), signal)
+    signal.throwIfAborted()
   } catch (error) {
     await removeVoice(directory, voiceId).catch(() => undefined)
     throw error
@@ -172,8 +178,18 @@ ctx.addEventListener('message', event => {
           break
         }
         case 'download': {
-          await enqueue(() => downloadVoice(req.voiceId, req.requestId))
-          ctx.postMessage({ type: 'done', requestId: req.requestId })
+          const controller = new AbortController()
+          downloads.set(req.requestId, controller)
+          try {
+            await enqueue(() => downloadVoice(req.voiceId, req.requestId, controller.signal))
+            ctx.postMessage({ type: 'done', requestId: req.requestId })
+          } finally {
+            downloads.delete(req.requestId)
+          }
+          break
+        }
+        case 'cancel-download': {
+          downloads.get(req.requestId)?.abort()
           break
         }
         case 'synthesize': {

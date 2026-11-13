@@ -2,6 +2,7 @@ import { loadOriginalFile, saveImportedBook } from '@leitor/core'
 import type { BookRecord, ChapterRecord, OutlineEntry, ParsedBook, ParsedChapter } from '@leitor/core'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import type { TextItem } from 'pdfjs-dist/types/src/display/api'
+import { extractParagraphs, layoutPage } from './layout'
 import type { PdfPageLayout } from './layout'
 
 export interface PdfImportOptions {
@@ -53,13 +54,16 @@ function abortPdf(): DOMException {
   return new DOMException('A importação do PDF foi cancelada.', 'AbortError')
 }
 
-async function parsePdf(file: Blob, options: PdfImportOptions): Promise<ParsedBook> {
-  const { signal, onPassword, onProgress } = options
+export async function withPdfDocument<T>(
+  file: Blob,
+  options: PdfImportOptions,
+  useDocument: (document: PDFDocumentProxy, askedForPassword: boolean) => Promise<T>,
+): Promise<T> {
+  const { signal, onPassword } = options
   signal?.throwIfAborted()
-  const [{ getDocument, GlobalWorkerOptions, PasswordResponses }, { default: workerUrl }, layout, data] = await Promise.all([
+  const [{ getDocument, GlobalWorkerOptions, PasswordResponses }, { default: workerUrl }, data] = await Promise.all([
     import('pdfjs-dist/legacy/build/pdf.mjs'),
     import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'),
-    import('./layout'),
     file.arrayBuffer(),
   ])
   signal?.throwIfAborted()
@@ -95,6 +99,22 @@ async function parsePdf(file: Blob, options: PdfImportOptions): Promise<ParsedBo
   try {
     const document = await task.promise
     signal?.throwIfAborted()
+    return await useDocument(document, askedForPassword)
+  } catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw abortPdf()
+    if (error instanceof Error && (error.name === 'InvalidPDFException' || error.name === 'FormatError')) {
+      throw new Error('O PDF está danificado ou contém uma estrutura que o Leitor não conseguiu abrir.')
+    }
+    throw error
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
+    await close()
+  }
+}
+
+async function parsePdf(file: Blob, options: PdfImportOptions): Promise<ParsedBook> {
+  const { signal, onProgress } = options
+  return withPdfDocument(file, options, async (document, askedForPassword) => {
     const [metadata, labels, entries] = await Promise.all([
       document.getMetadata(),
       document.getPageLabels().catch(() => null),
@@ -107,12 +127,12 @@ async function parsePdf(file: Blob, options: PdfImportOptions): Promise<ParsedBo
       const page = await document.getPage(number)
       const content = await page.getTextContent()
       const items = content.items.filter((item): item is TextItem => 'str' in item)
-      layouts.push(layout.layoutPage(items, page.view, page.rotate))
+      layouts.push(layoutPage(items, page.view, page.rotate))
       page.cleanup()
       onProgress?.(number, document.numPages)
       // Cada página aguarda o worker, permitindo pintar progresso e cancelar.
     }
-    const chapters = layout.extractParagraphs(layouts).map((paragraphs, index): ParsedChapter => {
+    const chapters = extractParagraphs(layouts).map((paragraphs, index): ParsedChapter => {
       const pageNumber = index + 1
       const pageLabel = labels?.[index]
       return { title: `Página ${pageNumber}`, pageNumber, pageLabel, sourceId: `page:${pageNumber}`, paragraphs }
@@ -128,23 +148,11 @@ async function parsePdf(file: Blob, options: PdfImportOptions): Promise<ParsedBo
       parserVersion: 1,
       protected: askedForPassword || Boolean(field(metadata.info, 'EncryptFilterName')),
     }
-  } catch (error) {
-    if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw abortPdf()
-    if (error instanceof Error && (error.name === 'InvalidPDFException' || error.name === 'FormatError')) {
-      throw new Error('O PDF está danificado ou contém uma estrutura que o Leitor não conseguiu abrir.')
-    }
-    throw error
-  } finally {
-    signal?.removeEventListener('abort', onAbort)
-    await close()
-  }
+  })
 }
 
 export async function importPdf(file: File, options: PdfImportOptions = {}): Promise<{ id: string }> {
   const parsed = await parsePdf(file, options)
-  if (!parsed.chapters.some(page => page.paragraphs.length)) {
-    throw new Error('Este PDF não tem texto selecionável. A leitura de páginas digitalizadas precisa de OCR.')
-  }
   const id = await saveImportedBook(file, 'pdf', parsed, file.name, options.signal)
   return { id }
 }

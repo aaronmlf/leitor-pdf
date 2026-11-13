@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from
 import type { DragEvent, ReactNode } from 'react'
 import type { LibraryBook } from '@leitor/core'
 import { isPdfFile, useLibrary } from '../hooks/useLibrary'
+import { LibraryStorage } from './LibraryStorage'
 import type { PdfSession } from '../pdf/importPdf'
 import './library.css'
 
@@ -143,6 +144,7 @@ export default function Library({ onOpen, lastBookId }: {
   const [query, setQuery] = useState('')
   const [format, setFormat] = useState<BookFormat | 'all'>('all')
   const [sort, setSort] = useState<Sort>('activity')
+  const [storageOpen, setStorageOpen] = useState(false)
 
   const books = library.status === 'ready' ? library.books : []
   const continueBook = books.reduce<LibraryBook | null>((recent, book) => {
@@ -273,7 +275,7 @@ export default function Library({ onOpen, lastBookId }: {
           <section className="empty library-empty">
             <h2 className="empty-title">Sua biblioteca está vazia</h2>
             <button className="btn btn-primary" onClick={showPicker} disabled={!!busy}>Importar livro</button>
-            <p className="muted">EPUB, TXT e PDF com texto selecionável.</p>
+            <p className="muted">EPUB, TXT e PDF, inclusive digitalizado.</p>
             <button className="btn" onClick={importDemo} disabled={!!busy}>Experimentar com o livro de demonstração</button>
           </section>
         )}
@@ -350,6 +352,12 @@ export default function Library({ onOpen, lastBookId }: {
             <p className="muted">Os livros ficam neste aparelho. O processamento da voz depende do motor escolhido. O Piper usa vozes baixadas.</p>
           </section>
         )}
+        {ready && <section className="library-block">
+          <details onToggle={event => setStorageOpen(event.currentTarget.open)}>
+            <summary>Armazenamento</summary>
+            {storageOpen && <LibraryStorage key={books.length} />}
+          </details>
+        </section>}
         {((ready && books.length === 0) || dragging) && (
           <p className={`drop-hint library-drop${dragging ? ' active' : ''}`}>Solte arquivos EPUB, TXT ou PDF aqui.</p>
         )}

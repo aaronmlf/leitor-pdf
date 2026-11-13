@@ -8,4 +8,8 @@
     <string name="playback_channel_desc">Mostra quando o Leitor está lendo em voz alta</string>
     <string name="playback_notification_title">Leitor — leitura em voz alta</string>
     <string name="playback_notification_text">Leitura em andamento. Toque para voltar ao app.</string>
+    <string name="playback_play">Continuar leitura</string>
+    <string name="playback_pause">Pausar leitura</string>
+    <string name="playback_previous">Frase anterior</string>
+    <string name="playback_next">Próxima frase</string>
 </resources>
