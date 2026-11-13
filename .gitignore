@@ -1,0 +1,17 @@
+node_modules/
+dist/
+dev-dist/
+*.local
+
+# Artefatos distribuídos nas Releases e configuração local
+*.apk
+*.aab
+*.jks
+*.keystore
+.env
+.env.*
+/apps/desktop/src-tauri/target/
+/apps/desktop/src-tauri/gen/
+/apps/web/public/ort/
+/apps/web/public/piper/
+/releases/

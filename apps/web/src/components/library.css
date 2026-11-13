@@ -1,0 +1,264 @@
+.library {
+  padding: calc(24px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+    calc(36px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  --library-accent: var(--accent);
+  --library-muted: var(--text-dim);
+  --library-error: #ffd9da;
+}
+
+@media (prefers-color-scheme: light) {
+  .library {
+    --library-accent: #855603;
+    --library-muted: #535e67;
+    --library-error: #8c1d21;
+  }
+}
+
+.library-inner {
+  max-width: 54rem;
+  margin-inline: auto;
+}
+
+.library .page-header {
+  flex-wrap: wrap;
+  padding-block: 4px;
+}
+
+.library .btn,
+.library .icon-btn,
+.library .library-field :is(input, select) {
+  min-height: 44px;
+}
+
+.library .btn {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.library .btn-primary,
+.library .btn-primary:hover {
+  background: var(--library-accent);
+}
+
+.library .btn-danger,
+.library .btn-danger:hover {
+  background: #a82129;
+}
+
+.library .icon-btn {
+  min-width: 44px;
+}
+
+.library .muted,
+.library .book-author,
+.library .book-meta {
+  color: var(--library-muted);
+}
+
+.library :is(button, input, select):focus-visible,
+.library h1:focus {
+  outline: 2px solid var(--library-accent);
+  outline-offset: 3px;
+}
+
+.library .library-empty {
+  margin: 28px 0 20px;
+  padding: 28px 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--bg-elev);
+}
+
+.library-block {
+  margin-block: 20px;
+}
+
+.library :is(.library-block, .library-dialog) h2 {
+  margin: 0 0 12px;
+  color: var(--text-strong);
+  font-size: 1.08rem;
+}
+
+.library-section-header,
+.library-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.library-section-header {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.library .library-section-header h2 {
+  margin: 0;
+}
+
+.library-continue {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-elev);
+}
+
+.library-continue-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.library-continue-card .book-info {
+  flex: 1 1 7rem;
+}
+
+.library-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) repeat(2, minmax(8rem, max-content));
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.library-field {
+  display: grid;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.library .library-field :is(input, select) {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  color: var(--text-strong);
+  font: inherit;
+  font-weight: 400;
+}
+
+.library .library-field select {
+  appearance: auto;
+}
+
+.library .book-list {
+  max-width: none;
+}
+
+.library :is(.book-title, .book-author, .book-meta) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.library-imports {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.library-imports li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev);
+}
+
+.library-import-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.library-import-error {
+  color: var(--library-error);
+}
+
+.library-progress {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0;
+  color: var(--library-muted);
+  font-size: 0.9rem;
+}
+
+.library-progress progress {
+  width: min(100%, 18rem);
+  accent-color: var(--library-accent);
+}
+
+.library-backup {
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.library-backup p {
+  max-width: 52ch;
+}
+
+.library-dialog {
+  width: min(30rem, calc(100% - 24px));
+  max-height: calc(100dvh - 24px);
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-elev);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.library-dialog::backdrop {
+  background: rgb(0 0 0 / 60%);
+}
+
+.library-dialog .library-actions {
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.library-backup-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.library-backup-summary div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.library-backup-summary dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+@media (max-width: 36rem) {
+  .library-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .library-filters label:first-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (pointer: coarse) {
+  .library .library-drop {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .library .btn {
+    transition: none;
+  }
+}

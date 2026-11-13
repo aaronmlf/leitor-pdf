@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Leitor</string>
+    <string name="title_activity_main">Leitor</string>
+    <string name="package_name">br.leitor.app</string>
+    <string name="custom_url_scheme">br.leitor.app</string>
+    <string name="playback_channel_name">Leitura em voz alta</string>
+    <string name="playback_channel_desc">Mostra quando o Leitor está lendo em voz alta</string>
+    <string name="playback_notification_title">Leitor — leitura em voz alta</string>
+    <string name="playback_notification_text">Leitura em andamento. Toque para voltar ao app.</string>
+</resources>

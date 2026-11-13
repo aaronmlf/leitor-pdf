@@ -1,0 +1,17 @@
+{
+  "name": "@leitor/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.4.0",
+    "dexie": "^4.4.7",
+    "jszip": "^3.10.2"
+  }
+}
