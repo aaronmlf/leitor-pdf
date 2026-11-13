@@ -26,7 +26,8 @@ const runtimeFiles = [
   { source: join(ocrEngine, 'dist', 'worker.min.js'), directory: 'ocr', name: 'worker.min.js' },
   { source: join(ocrEngine, 'dist', 'worker.min.js.LICENSE.txt'), directory: 'ocr', name: 'worker.min.js.LICENSE.txt' },
   { source: join(ocrCore, 'LICENSE'), directory: 'ocr', name: 'LICENSE' },
-  { source: join(ocrLanguage, '4.0.0_best_int', 'por.traineddata.gz'), directory: 'ocr', name: 'por.traineddata.gz' },
+  // AAPT descompacta e renomeia arquivos com sufixo .gz. O OCR detecta o gzip pelo conteúdo.
+  { source: join(ocrLanguage, '4.0.0_best_int', 'por.traineddata.gz'), directory: 'ocr', name: 'por.traineddata' },
   ...['lstm', 'simd-lstm', 'relaxedsimd-lstm'].map(variant => {
     const name = `tesseract-core-${variant}.wasm.js`
     return { source: join(ocrCore, name), directory: 'ocr', name }

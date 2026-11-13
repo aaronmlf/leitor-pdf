@@ -152,6 +152,7 @@ export async function runPdfOcr(bookId: string, pages: number[], options: OcrOpt
       corePath: directory,
       langPath: directory.slice(0, -1),
       workerBlobURL: false,
+      gzip: false,
       cacheMethod: 'none',
       logger: ({ progress, status }) => {
         if (stage === 'recognizing' && status === 'recognizing text') report(progress)
